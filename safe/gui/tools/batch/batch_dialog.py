@@ -51,6 +51,7 @@ from safe.definitionsv4.constants import (
     ANALYSIS_FAILED_BAD_INPUT,
     ANALYSIS_FAILED_BAD_CODE)
 from safe.gui.tools.batch import scenario_runner
+from safe.gui.analysis_utilities import generate_impact_report
 from safe.utilities.gis import extent_string_to_array
 from safe.common.exceptions import FileNotFoundError
 from safe.common.utilities import temp_dir
@@ -336,10 +337,13 @@ class BatchDialog(QDialog, FORM_CLASS):
         filename = os.path.split(file_path)[-1]
         extension = os.path.splitext(filename)[-1]
         basename = os.path.splitext(filename)[-2]
+        if not os.path.exists(fullpath):
+            print 
         print extension
         if extension in ['.asc', '.tif']:
             layer = QgsRasterLayer(fullpath, basename)
             print layer.source()
+            print layer.isValid()
             return layer
         elif extension in ['.shp']:
             layer = QgsVectorLayer(fullpath, basename, 'ogr')
@@ -615,6 +619,11 @@ class BatchDialog(QDialog, FORM_CLASS):
                 print "Impact layer is valid"
                 print "-----------------"
                 reg.instance().addMapLayers([impact_layer])
+                try:
+                    # Rizky is a bad coder
+                    generate_impact_report(impact_function, self.iface)
+                except:
+                    pass
             else:
                 print "-----------------"
                 print "Impact layer is not valid"
