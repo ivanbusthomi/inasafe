@@ -44,14 +44,22 @@ from PyQt4.QtGui import (
     QPushButton,
     QDialogButtonBox)
 
-from safe.definitionsv4.constants import ANALYSIS_SUCCESS
+from safe.definitionsv4.constants import (
+    PREPARE_SUCCESS,
+    PREPARE_FAILED_BAD_INPUT,
+    PREPARE_FAILED_INSUFFICIENT_OVERLAP,
+    ANALYSIS_FAILED_BAD_INPUT,
+    ANALYSIS_FAILED_BAD_CODE)
 from safe.gui.tools.batch import scenario_runner
 from safe.utilities.gis import extent_string_to_array
 from safe.common.exceptions import FileNotFoundError
 from safe.common.utilities import temp_dir
 from safe.utilities.resources import (
-    html_footer, html_header, get_ui_class)
+    html_footer,
+    html_header,
+    get_ui_class)
 from safe.messaging import styles
+from safe.impact_function.impact_function import ImpactFunction
 from safe.utilities.resources import resources_path
 from safe.gui.tools.help.batch_help import batch_help
 
@@ -270,6 +278,78 @@ class BatchDialog(QDialog, FORM_CLASS):
             function(self.iface)
         else:
             function()
+
+    def read_scenario(self, items):
+        """Function to read scenario and get layers and settings from the
+        scenario
+
+        :param items: Dictionary containing layer and other settings
+        """
+
+        # Need better way in handling bad directory
+        if 'hazard' in items:
+            LOGGER.info('hazard layer found')
+            hazard_path = items['hazard']
+            hazard_layer = self.define_layer(hazard_path)
+        else:
+            hazard_layer = None
+            LOGGER.critical("hazard layer is not found")
+        if 'exposure' in items:
+            LOGGER.info('exposure layer found')
+            exposure_path = items['exposure']
+            exposure_layer = self.define_layer(exposure_path)
+        else:
+            exposure_layer = None
+            LOGGER.critical("exposure layer is not found")
+        if 'aggregation' in items:
+            LOGGER.info('aggregation layer found')
+            aggregation_path = items['aggregation']
+            aggregation_layer = self.define_layer(aggregation_path)
+        else:
+            aggregation_layer = None
+            LOGGER.critical("aggregation layer is not found")
+        if 'extent_crs' in items:
+            crs = items['extent_crs']
+            crs_id = QgsCoordinateReferenceSystem(crs)
+            print crs_id
+        else:
+            crs_id = QgsCoordinateReferenceSystem('EPSG:4326')
+        if 'extent' in items:
+            coordinates = items['extent']
+            coordinates = extent_string_to_array(coordinates)
+            extent = QgsRectangle(*coordinates)
+        else:
+            extent = self.iface.mapCanvas().extent()
+
+        return hazard_layer, exposure_layer, aggregation_layer, extent, crs_id
+
+
+    def define_layer(self, file_path):
+        """Function to create layer from input path
+
+        :param file_path: Full path of layer source
+        :return: layer
+        """
+        scenario_directory = str(self.source_directory.text())
+        fullpath = os.path.join(scenario_directory, file_path)
+        fullpath = os.path.normpath(fullpath)
+        filename = os.path.split(file_path)[-1]
+        extension = os.path.splitext(filename)[-1]
+        basename = os.path.splitext(filename)[-2]
+        print extension
+        if extension in ['.asc', '.tif']:
+            layer = QgsRasterLayer(fullpath, basename)
+            print layer.source()
+            return layer
+        elif extension in ['.shp']:
+            layer = QgsVectorLayer(fullpath, basename, 'ogr')
+            print layer.source()
+            if layer.isValid():
+                return layer
+            else:
+                LOGGER.critical("layer is invalid")
+        else:
+            LOGGER.critical('extension is not recognized')
 
     def run_scenario(self, items):
         """Run a simple scenario.
@@ -518,48 +598,92 @@ class BatchDialog(QDialog, FORM_CLASS):
             path = str(self.output_directory.text())
             title = str(task_item.text())
 
-            # Its a dict containing files for a scenario
-            status, message = self.run_scenario(value)
-            if status != ANALYSIS_SUCCESS:
-                status_item.setText(self.tr('Analysis Fail'))
-                logging.exception(message)
+            impact_function = self.prepare_impact_function(value)
+            if not impact_function:
+                LOGGER.warning("Impact Function is not ready")
+                return
+            status, message = impact_function.run()
+
+            if status == ANALYSIS_FAILED_BAD_INPUT:
+                LOGGER.info("Bad Input detected")
+            elif status == ANALYSIS_FAILED_BAD_CODE:
+                LOGGER.exception("Impact function encountered a bug")
+
+            impact_layer = impact_function.impact
+            if impact_layer.isValid():
+                print "-----------------"
+                print "Impact layer is valid"
+                print "-----------------"
+                reg.instance().addMapLayers([impact_layer])
             else:
-                # NOTE(gigih):
-                # Usually after analysis is done, the impact layer
-                # become the active layer. <--- WRONG
-                # noinspection PyUnresolvedReferences
-                impact_function = self.dock.impact_function
-                impact_layer = impact_function.impact
-                impact_layer_source = impact_layer.source()
-                LOGGER.info('Impact layer source: "%s"' % impact_layer_source)
-                legend_interface = self.iface.legendInterface()
-                # turn off exposure layer visibility
-                exposure_layer = self.identify_layer(self.exposure_source)
-                legend_interface.setLayerVisible(exposure_layer, False)
-                # Move layer group created from the analysis to layer group
-                # created by batchrunner
-                scenario_group = self.root.children()[0]
-                cloned_group = scenario_group.clone()
-                self.layer_group.insertChildNode(0, cloned_group)
-                self.root.removeChildNode(scenario_group)
-                # noinspection PyBroadException
-                try:
-                    status_item.setText(self.tr('Analysis Ok'))
-                    # Etienne 20/12/16 Let's disable the PDF until V4 can do it
-                    # self.create_pdf(
-                    #     title, path, impact_layer, count, index)
-                    LOGGER.info('Map has been rendered: "%s"' % value)
-                    # status_item.setText(self.tr('Report Ok'))
-                except Exception:  # pylint: disable=W0703
-                    LOGGER.exception('Unable to render map: "%s"' % value)
-                    status_item.setText(self.tr('Report Failed'))
-                    result = False
+                print "-----------------"
+                print "Impact layer is not valid"
+                print "-----------------"
+
+
+            # status, message = self.run_scenario(value)
+            # if status != ANALYSIS_SUCCESS:
+            #     status_item.setText(self.tr('Analysis Fail'))
+            #     logging.exception(message)
+            # else:
+            #     # NOTE(gigih):
+            #     # Usually after analysis is done, the impact layer
+            #     # become the active layer. <--- WRONG
+            #     # noinspection PyUnresolvedReferences
+            #     impact_function = self.dock.impact_function
+            #     impact_layer = impact_function.impact
+            #     impact_layer_source = impact_layer.source()
+            #     LOGGER.info('Impact layer source: "%s"' % impact_layer_source)
+            #     legend_interface = self.iface.legendInterface()
+            #     # turn off exposure layer visibility
+            #     exposure_layer = self.identify_layer(self.exposure_source)
+            #     legend_interface.setLayerVisible(exposure_layer, False)
+            #     # Move layer group created from the analysis to layer group
+            #     # created by batchrunner
+            #     scenario_group = self.root.children()[0]
+            #     cloned_group = scenario_group.clone()
+            #     self.layer_group.insertChildNode(0, cloned_group)
+            #     self.root.removeChildNode(scenario_group)
+            #     # noinspection PyBroadException
+            #     try:
+            #         status_item.setText(self.tr('Analysis Ok'))
+            #         # Etienne 20/12/16 Let's disable the PDF until V4 can do it
+            #         # self.create_pdf(
+            #         #     title, path, impact_layer, count, index)
+            #         LOGGER.info('Map has been rendered: "%s"' % value)
+            #         # status_item.setText(self.tr('Report Ok'))
+            #     except Exception:  # pylint: disable=W0703
+            #         LOGGER.exception('Unable to render map: "%s"' % value)
+            #         status_item.setText(self.tr('Report Failed'))
+            #         result = False
         else:
             LOGGER.exception('Data type not supported: "%s"' % value)
             result = False
 
         self.disable_busy_cursor()
         return result
+
+    def prepare_impact_function(self, value):
+        # define impact_function
+        hz, exp, agg, ex, ex_crs = self.read_scenario(value)
+        impact_function = ImpactFunction()
+        impact_function.hazard = hz
+        impact_function.exposure = exp
+        if agg:
+            impact_function.aggregation = agg
+        else:
+            impact_function.requested_extent = ex
+            impact_function.requested_extent_crs = ex_crs
+        status, message = impact_function.prepare()
+
+        if status == PREPARE_SUCCESS:
+            LOGGER.info("Impact Function ready")
+            return impact_function
+        else:
+            print status, message
+            return
+
+
 
     def check_removed(self):
         """Function to check whether layer removal is properly run or not
