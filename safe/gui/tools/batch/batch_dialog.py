@@ -282,7 +282,7 @@ class BatchDialog(QDialog, FORM_CLASS):
 
     def read_scenario(self, items):
         """Function to read scenario and get layers and settings from the
-        scenario
+        scenario file
 
         :param items: Dictionary containing layer and other settings
         """
@@ -334,26 +334,28 @@ class BatchDialog(QDialog, FORM_CLASS):
         scenario_directory = str(self.source_directory.text())
         fullpath = os.path.join(scenario_directory, file_path)
         fullpath = os.path.normpath(fullpath)
+
         filename = os.path.split(file_path)[-1]
         extension = os.path.splitext(filename)[-1]
         basename = os.path.splitext(filename)[-2]
+        # check if file is exist
         if not os.path.exists(fullpath):
-            print 
-        print extension
-        if extension in ['.asc', '.tif']:
-            layer = QgsRasterLayer(fullpath, basename)
-            print layer.source()
-            print layer.isValid()
-            return layer
-        elif extension in ['.shp']:
-            layer = QgsVectorLayer(fullpath, basename, 'ogr')
-            print layer.source()
-            if layer.isValid():
-                return layer
-            else:
-                LOGGER.critical("layer is invalid")
+            return
         else:
-            LOGGER.critical('extension is not recognized')
+            if extension in ['.asc', '.tif']:
+                layer = QgsRasterLayer(fullpath, basename)
+                print layer.source()
+                print layer.isValid()
+                return layer
+            elif extension in ['.shp']:
+                layer = QgsVectorLayer(fullpath, basename, 'ogr')
+                print layer.source()
+                if layer.isValid():
+                    return layer
+                else:
+                    LOGGER.critical("layer is invalid")
+            else:
+                LOGGER.critical('extension is not recognized')
 
     def run_scenario(self, items):
         """Run a simple scenario.
