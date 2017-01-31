@@ -291,13 +291,12 @@ class BatchDialog(QDialog, FORM_CLASS):
             status_item = self.table.item(row, 1)
             status_item.setText(self.tr(''))
 
-    def prepare_task(self, items):
-        """Prepare scenario for impact function variable.
+    def get_hazard(self, items):
+        """Function to get hazard layer.
 
-        :param items: Dictionary containing settings for impact function.
-        :type items: Python dictionary.
-
-        :return: QgsVectorLayer, QgsRasterLayer, extent, extent_crs
+        This function is to get hazard layer stored in dictionary file.
+        :param items: Scenario dictionary
+        :return: QgsMapLayer
         """
 
         status = True
@@ -306,42 +305,68 @@ class BatchDialog(QDialog, FORM_CLASS):
             LOGGER.info('Hazard path is found')
             hazard_path = items['hazard']
             hazard = self.define_layer(hazard_path)
-            if not hazard:
-                status = False
+            return hazard
         else:
             hazard = None
             LOGGER.warning('Scenario does not contain hazard path')
+            return
 
-        # get exposure
+    def get_exposure(self, items):
+        """Function to get exposure layer.
+
+        This function is to get exposure layer stored in dictionary file.
+        :param items: Scenario dictionary
+        :return: QgsMapLayer
+        """
         if 'exposure' in items:
             LOGGER.info('Exposure path is found')
             exposure_path = items['exposure']
             exposure = self.define_layer(exposure_path)
-            if not exposure:
-                status = False
+            return exposure
         else:
-            exposure = None
-            LOGGER.warning('Scenario does not contain hazard path')
+            LOGGER.warning('Scenario does not contain exposure path')
+            return
 
-        # get aggregation
+    def get_aggregation(self, items):
+        """Function to get exposure layer.
+
+        This function is to get exposure layer stored in dictionary file.
+        :param items: Scenario dictionary
+        :return: QgsMapLayer
+        """
         if 'aggregation' in items:
             LOGGER.info('Aggregation path is found')
             aggregation_path = items['aggregation']
             aggregation = self.define_layer(aggregation_path)
+            return aggregation
         else:
-            aggregation = None
-            LOGGER.info('Scenario does not contain aggregation path')
+            LOGGER.warning('Scenario does not contain aggregation path')
+            return
 
-        # get extent
+    def get_extent(self, items):
+        """Function to get extent.
+
+        This function is to get extent from layer stored in dictionary file.
+        :param items: Scenario dictionary
+        :return: QgsRectangle
+        """
         if 'extent' in items:
-            LOGGER.info('Extent coordinate is found')
+            LOGGER.info('Extent information is found')
             coordinates = items['extent']
             array_coord = extent_string_to_array(coordinates)
             extent = QgsRectangle(*array_coord)
+            return extent
         else:
-            extent = None
-            LOGGER.info('Scenario does not contain extent coordinates')
+            LOGGER.warning('Scenario does not contain extent information')
+            return
 
+    def get_extent_crsid(self,items):
+        """Function to get extent CRS ID.
+
+        This function is to get extent CRS ID information from scenario.
+        :param items: Scenario dictionary
+        :return: QgsCoordinateReferenceSystem
+        """
         # get extent crs id
         if 'extent_crs' in items:
             LOGGER.info('Extent CRS is found')
@@ -350,14 +375,52 @@ class BatchDialog(QDialog, FORM_CLASS):
         else:
             LOGGER.info('Extent crs is not found, assuming crs to EPSG:4326')
             extent_crs = QgsCoordinateReferenceSystem('EPSG:4326')
+        return extent_crs
 
-        # make sure at least hazard and exposure data are available in
-        # scenario. Aggregation and extent checking will be done when
-        # assigning layer to impact_function
-        if status:
-            return hazard, exposure, aggregation, extent, extent_crs
+
+    def impact_function_preparation(self, value):
+        """Prepare values to be assigned to impact function.
+
+        Prepare by assigning layers and extent information from scenario
+        file to impact function.
+        :param value: Scenario dictionary
+        :return: ImpactFunction
+        """
+
+        # get layer information from scenario
+        hazard = self.get_hazard(value)
+        exposure = self.get_exposure(value)
+        aggregation = self.get_aggregation(value)
+        extent = self.get_extent(value)
+        extent_crs = self.get_extent_crsid(value)
+        # assign layer information to impact function
+        impact_function = ImpactFunction()
+        if hazard:
+            impact_function.hazard = hazard
+            # add layer to qgis map layer registry
+            reg.instance().addMapLayer(hazard,False)
         else:
-            return status
+            LOGGER.warning('Assigning hazard to impact function failed')
+        if exposure:
+            impact_function.exposure = exposure
+            # add layer to qgis map layer registry
+            reg.instance().addMapLayer(exposure, False)
+        else:
+            LOGGER.warning('Assigning exposure to impact function failed')
+        if aggregation:
+            impact_function.aggregation = aggregation
+            # add layer to qgis map layer registry
+            reg.instance().addMapLayer(aggregation, False)
+        elif extent:
+            impact_function.requested_extent = extent
+            impact_function.requested_extent_crs = extent_crs
+        prepare_status, prepare_message = impact_function.prepare()
+        if not prepare_status == PREPARE_SUCCESS:
+            LOGGER.warning('Impact function is not ready with message: ')
+            LOGGER.warning(prepare_message)
+            return
+        else:
+            return impact_function
 
     def define_layer(self, layer_path):
         """Create QGIS layer (either vector or raster) from file path input.
@@ -448,73 +511,52 @@ class BatchDialog(QDialog, FORM_CLASS):
             group_name = value['scenario_name']
             self.layer_group = self.root.addGroup(group_name)
             self.layer_group_container.append(self.layer_group)
+            # prepare impact function
+            impact_function = self.impact_function_preparation(value)
+            # run
+            status, message = impact_function.run()
+            if status == ANALYSIS_SUCCESS:
+                status_item.setText(self.tr('Analysis Success'))
+                impact_layer = impact_function.impact
+                if impact_layer.isValid():
+                    reg.instance().addMapLayer(impact_layer, False)
+                    for layer in reg.instance().mapLayers().values():
+                        self.layer_group.addLayer(layer)
+                    for layer in reg.instance().mapLayers().values():
+                        # print layer
+                        # turn of layer visibility if not impact layer
+                        if layer.id() == impact_layer.id():
+                            self.legend.setLayerVisible(layer, True)
+                            # set impact layer as active layer and zoom to it
+                            self.iface.setActiveLayer(layer)
+                            self.iface.zoomToActiveLayer()
+                        else:
+                            self.legend.setLayerVisible(layer, False)
+                    # generate map report and impact report
+                    try:
+                        # this line is to save the impact report in default
+                        # InaSAFE directory.
+                        generate_impact_report(impact_function, self.iface)
+                        generate_impact_map_report(
+                            impact_function,
+                            self.iface)
+                        # this line is to save the report in user specified
+                        # directory.
+                        self.generate_pdf_report(
+                            impact_function,
+                            self.iface,
+                            group_name)
+                    except:
+                        status_item.setText('Report failed to generate')
+                else:
+                    LOGGER.info('Impact layer is invalid')
+            elif status == ANALYSIS_FAILED_BAD_INPUT:
+                LOGGER.info('Bad input detected')
+                LOGGER.info(message)
+            elif status == ANALYSIS_FAILED_BAD_CODE:
+                LOGGER.info('Impact function encountered a bug')
+                LOGGER.info(message)
 
-            # Its a dict containing files for a scenario
-            hazard, exposure, aggregation, extent, extent_crs = \
-                self.prepare_task(value)
-            impact_function = ImpactFunction()
-            impact_function.hazard = hazard
-            impact_function.exposure = exposure
-            if aggregation:
-                impact_function.aggregation = aggregation
-            elif extent:
-                impact_function.requested_extent = extent
-                impact_function.requested_extent_crs = extent_crs
-            prepare_status, prepare_message = impact_function.prepare()
-            if prepare_status == PREPARE_SUCCESS:
-                LOGGER.info('Impact function ready')
-                status, message = impact_function.run()
-                if status == ANALYSIS_SUCCESS:
-                    status_item.setText(self.tr('Analysis Success'))
-                    impact_layer = impact_function.impact
-                    if impact_layer.isValid():
-                        layer_list = [
-                            impact_layer,
-                            hazard,
-                            exposure,
-                            aggregation]
-                        reg.instance().addMapLayers(layer_list, False)
-                        for layer in layer_list:
-                            self.layer_group.addLayer(layer)
-                        # TODO:: Find proper way to recognize layer.
-                        # somehow InaSAFE or QGIS won't recognized added layer
-                        # until we print the layer list in mapCanvas
-                        print "printing layer count and layer list"
-                        print self.iface.mapCanvas().layerCount()
-                        for layer in self.iface.mapCanvas().layers():
-                            print layer
-                            # turn of layer visibility if not impact layer
-                            if layer.id() == impact_layer.id():
-                                self.legend.setLayerVisible(layer, True)
-                            else:
-                                self.legend.setLayerVisible(layer, False)
-                        # generate map report and impact report
-                        try:
-                            # this line is to save the impact report in default
-                            # InaSAFE directory.
-                            generate_impact_report(impact_function, self.iface)
-                            generate_impact_map_report(
-                                impact_function,
-                                self.iface)
-                            # this line is to save the report in user specified
-                            # directory.
-                            self.generate_pdf_report(
-                                impact_function,
-                                self.iface,
-                                group_name)
-                        except:
-                            status_item.setText('Report failed to generate')
-                    else:
-                        LOGGER.info('Impact layer is invalid')
-                elif status == ANALYSIS_FAILED_BAD_INPUT:
-                    LOGGER.info('Bad input detected')
-                    LOGGER.info(message)
-                elif status == ANALYSIS_FAILED_BAD_CODE:
-                    LOGGER.info('Impact function encountered a bug')
-                    LOGGER.info(message)
-            else:
-                LOGGER.warning('Impact function not ready with message:')
-                LOGGER.info(prepare_message)
 
         else:
             LOGGER.exception('Data type not supported: "%s"' % value)
@@ -552,12 +594,15 @@ class BatchDialog(QDialog, FORM_CLASS):
 
     @pyqtSignature('')
     def run_selected_clicked(self):
-        """Run the selected scenario."""
+        """Run the selected scenario.
+
+        """
+        # get all selected rows
         rows = sorted(set(index.row() for index in
                           self.table.selectedIndexes()))
         self.enable_busy_cursor()
+        # iterate over selected rows
         for row in rows:
-            # current_row = self.table.currentRow()
             current_row = row
             item = self.table.item(current_row, 0)
             status_item = self.table.item(current_row, 1)
