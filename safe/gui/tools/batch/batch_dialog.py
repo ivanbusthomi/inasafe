@@ -143,7 +143,7 @@ class BatchDialog(QDialog, FORM_CLASS):
             self.run_selected_button, QDialogButtonBox.ActionRole)
 
         # Set up new project settings
-        self.start_in_new_project = True
+        self.start_in_new_project = False
 
         # Set up context help
         self.help_button = self.button_box.button(QtGui.QDialogButtonBox.Help)
@@ -299,7 +299,6 @@ class BatchDialog(QDialog, FORM_CLASS):
         :return: QgsMapLayer
         """
 
-        status = True
         # get hazard
         if 'hazard' in items:
             LOGGER.info('Hazard path is found')
@@ -307,7 +306,6 @@ class BatchDialog(QDialog, FORM_CLASS):
             hazard = self.define_layer(hazard_path)
             return hazard
         else:
-            hazard = None
             LOGGER.warning('Scenario does not contain hazard path')
             return
 
@@ -360,7 +358,7 @@ class BatchDialog(QDialog, FORM_CLASS):
             LOGGER.warning('Scenario does not contain extent information')
             return
 
-    def get_extent_crsid(self,items):
+    def get_extent_crsid(self, items):
         """Function to get extent CRS ID.
 
         This function is to get extent CRS ID information from scenario.
@@ -376,7 +374,6 @@ class BatchDialog(QDialog, FORM_CLASS):
             LOGGER.info('Extent crs is not found, assuming crs to EPSG:4326')
             extent_crs = QgsCoordinateReferenceSystem('EPSG:4326')
         return extent_crs
-
 
     def impact_function_preparation(self, value):
         """Prepare values to be assigned to impact function.
@@ -398,7 +395,7 @@ class BatchDialog(QDialog, FORM_CLASS):
         if hazard:
             impact_function.hazard = hazard
             # add layer to qgis map layer registry
-            reg.instance().addMapLayer(hazard,False)
+            reg.instance().addMapLayer(hazard, False)
         else:
             LOGGER.warning('Assigning hazard to impact function failed')
         if exposure:
@@ -504,9 +501,9 @@ class BatchDialog(QDialog, FORM_CLASS):
                     str(e))
                 result = False
         elif isinstance(value, dict):
-            # path = str(self.output_directory.text())
-            # title = str(task_item.text())
-
+            # start in new project if toggle is active
+            if self.start_in_new_project:
+                self.iface.newProject()
             # create layer group
             group_name = value['scenario_name']
             self.layer_group = self.root.addGroup(group_name)
@@ -523,7 +520,6 @@ class BatchDialog(QDialog, FORM_CLASS):
                     for layer in reg.instance().mapLayers().values():
                         self.layer_group.addLayer(layer)
                     for layer in reg.instance().mapLayers().values():
-                        # print layer
                         # turn of layer visibility if not impact layer
                         if layer.id() == impact_layer.id():
                             self.legend.setLayerVisible(layer, True)
@@ -556,8 +552,6 @@ class BatchDialog(QDialog, FORM_CLASS):
             elif status == ANALYSIS_FAILED_BAD_CODE:
                 LOGGER.info('Impact function encountered a bug')
                 LOGGER.info(message)
-
-
         else:
             LOGGER.exception('Data type not supported: "%s"' % value)
             result = False
@@ -932,7 +926,6 @@ def validate_scenario(blocks, scenario_directory):
                     ready = False
         if ready:
             blocks_update[section] = {'status': 'Scenario ready'}
-            # LOGGER.info(section + " scenario is ready")
     for section, section_item in blocks_update.iteritems():
         blocks[section]['status'] = blocks_update[section]['status']
 
