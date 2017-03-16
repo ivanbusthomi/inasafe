@@ -42,7 +42,9 @@ from PyQt4.QtGui import (
     QFileDialog,
     QTableWidgetItem,
     QPushButton,
-    QDialogButtonBox)
+    QDialogButtonBox,
+    QMenu,
+    QAction)
 
 from safe.definitions.constants import (
     ANALYSIS_SUCCESS,
@@ -818,6 +820,20 @@ class BatchDialog(QDialog, FORM_CLASS):
         string += footer
 
         self.help_web_view.setHtml(string)
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        edit_action = menu.addAction("Edit scenario")
+        load_action = menu.addAction("Load layers")
+        menu.addSeparator()
+        openpdf_action = menu.addAction("Open PDF results")
+        action = menu.exec_(self.mapToGlobal(event.pos()))
+        if action == openpdf_action:
+            print "open pdf"
+        elif action == edit_action:
+            print "update scenario"
+        elif action == load_action:
+            print "load files"
 
 
 def read_scenarios(filename):
